@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 from flask import Flask, request, jsonify
 import telebot
 
@@ -95,6 +96,17 @@ if bot:
         for dev_id, info in connected_devices.items():
             msg += f"- <code>{dev_id}</code>\n"
         bot.reply_to(message, msg)
+
+    # تشغيل البوت في خيط خلفي (Background Thread) ليعمل بالتوازي مع السيرفر
+    def run_bot():
+        logger.info("Starting Telegram Bot Polling...")
+        try:
+            bot.infinity_polling(skip_pending=True)
+        except Exception as e:
+            logger.error(f"Bot polling error: {e}")
+
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
